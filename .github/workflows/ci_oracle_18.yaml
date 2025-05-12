@@ -1,0 +1,45 @@
+name: CI Oracle Legacy
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - oracle/**
+      - .github/workflows/ci_oracle_18.yaml
+
+defaults:
+  run:
+    working-directory: oracle
+
+jobs:
+  ci:
+    name: ci
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [ "3.13" ]
+    services:
+      oracle-18c:
+        image: gvenzl/oracle-xe:18.4.0-slim
+        ports:
+          - 1541:1521
+        options: >-
+          --env ORACLE_PASSWORD=test
+          --health-cmd="echo 'SELECT 1 FROM dual;' | sqlplus -s system/test@localhost:1521/XE"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v2
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: snok/install-poetry@v1
+        with:
+          version: '2.1.0'
+      - name: Install
+        run: poetry install
+      - name: test-oracle-18c
+        run: PORT=1541 poetry run pytest tests

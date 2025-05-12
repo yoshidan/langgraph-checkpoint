@@ -1,0 +1,15 @@
+[tool.poetry]
+name = "langgraph-sample"
+version = "0.1.0"
+description = ""
+authors = ["yoshidan <naohiro.y@gmail.com>"]
+readme = "README.md"
+
+[tool.poetry.dependencies]
+python = "^3.11"
+langgraph = "^0.3.30"
+langgraph-checkpoint-oracle = { path = "../oracle", develop = true }
+
+[build-system]
+requires = ["poetry-core"]
+build-backend = "poetry.core.masonry.api"
