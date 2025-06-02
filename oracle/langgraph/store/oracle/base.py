@@ -34,93 +34,46 @@ class Migration(NamedTuple):
     condition: Optional[Callable[["BaseOracleStore"], bool]] = None
 
 MIGRATIONS: Sequence[str] = [
+    # テーブル作成
     """
-    BEGIN
-        EXECUTE IMMEDIATE '
-            CREATE TABLE store (
-                prefix VARCHAR2(255) NOT NULL,
-                key VARCHAR2(255) NOT NULL,
-                value CLOB NOT NULL,
-                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                expires_at TIMESTAMP NULL,
-                ttl_minutes NUMBER NULL,
-                PRIMARY KEY (prefix, key)
-            )
-        ';
-    EXCEPTION
-        WHEN OTHERS THEN
-            IF SQLCODE != -955 THEN
-                RAISE;
-            END IF;
-    END;
+    CREATE TABLE store (
+        prefix VARCHAR2(255) NOT NULL,
+        key VARCHAR2(255) NOT NULL,
+        value CLOB NOT NULL,
+        created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+        expires_at TIMESTAMP NULL,
+        ttl_minutes NUMBER NULL,
+        PRIMARY KEY (prefix, key)
+    )
     """,
-    # Create index
+    # インデックス作成
     """
-    BEGIN
-        EXECUTE IMMEDIATE '
-            CREATE INDEX store_prefix_idx ON store (prefix)
-        ';
-    EXCEPTION
-        WHEN OTHERS THEN
-            IF SQLCODE != -955 THEN
-                RAISE;
-            END IF;
-    END;
+    CREATE INDEX store_prefix_idx ON store (prefix)
     """,
     # expires_at index
     """
-    BEGIN
-        EXECUTE IMMEDIATE '
-            CREATE INDEX idx_store_expires_at ON store (expires_at)
-        ';
-    EXCEPTION
-        WHEN OTHERS THEN
-            IF SQLCODE != -955 THEN
-                RAISE;
-            END IF;
-    END;
+    CREATE INDEX idx_store_expires_at ON store (expires_at)
     """,
 ]
 
 VECTOR_MIGRATIONS: Sequence[Migration] = [
     Migration(
         """
-        BEGIN
-            EXECUTE IMMEDIATE '
-                CREATE TABLE store_vectors (
-                    prefix VARCHAR2(255) NOT NULL,
-                    key VARCHAR2(255) NOT NULL,
-                    field_name VARCHAR2(255) NOT NULL,
-                    embedding VECTOR(%(dims)s),
-                    created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
-                    PRIMARY KEY (prefix, key, field_name)
-                )
-            ';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
+        CREATE TABLE store_vectors (
+            prefix VARCHAR2(255) NOT NULL,
+            key VARCHAR2(255) NOT NULL,
+            field_name VARCHAR2(255) NOT NULL,
+            embedding VECTOR,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (prefix, key, field_name)
+        )
         """,
-        params={
-            "dims": lambda store: store.index_config["dims"],
-        },
     ),
     Migration(
         """
-        BEGIN
-            EXECUTE IMMEDIATE '
-                CREATE INDEX store_vectors_embedding_idx ON store_vectors (embedding) INDEXTYPE IS VECTOR_INDEX
-            ';
-        EXCEPTION
-            WHEN OTHERS THEN
-                IF SQLCODE != -955 THEN
-                    RAISE;
-                END IF;
-        END;
+        CREATE INDEX store_vectors_embedding_idx ON store_vectors (embedding) INDEXTYPE IS VECTOR_INDEX
         """,
     ),
 ]
@@ -179,7 +132,11 @@ class BaseOracleStore:
                 try:
                     cur.execute(sql)
                     cur.execute("INSERT INTO store_migrations (v) VALUES (:1)", (v,))
-                except Exception as e:
+                except oracledb.DatabaseError as e:
+                    # ORA-00955: name is already used by an existing object
+                    if "ORA-00955" in str(e):
+                        cur.execute("INSERT INTO store_migrations (v) VALUES (:1)", (v,))
+                        continue
                     logger.error(f"Failed to apply migration {v}.\nSql={sql}\nError={e}")
                     raise
 
@@ -195,8 +152,15 @@ class BaseOracleStore:
                             for k, v in migration.params.items()
                         }
                         sql = sql % params
-                    cur.execute(sql)
-                    cur.execute("INSERT INTO vector_migrations (v) VALUES (:1)", (v,))
+                    try:
+                        cur.execute(sql)
+                        cur.execute("INSERT INTO vector_migrations (v) VALUES (:1)", (v,))
+                    except oracledb.DatabaseError as e:
+                        if "ORA-00955" in str(e):
+                            cur.execute("INSERT INTO vector_migrations (v) VALUES (:1)", (v,))
+                            continue
+                        logger.error(f"Failed to apply vector migration {v}.\nSql={sql}\nError={e}")
+                        raise
 
     def batch(self, ops: Iterable[Op]) -> list[Result]:
         grouped_ops, num_ops = _group_ops(ops)
@@ -231,43 +195,69 @@ class BaseOracleStore:
 
         return results
 
+    def _get_batch_GET_ops_queries(
+        self,
+        get_ops: Sequence[tuple[int, GetOp]],
+    ) -> list[tuple[str, tuple, tuple[str, ...], list]]:
+        """
+        Build queries to fetch (and optionally refresh the TTL of) multiple keys per namespace for Oracle.
+        Each returned element is a tuple of:
+        (sql_query_string, sql_params, namespace, items_for_this_namespace, update_query, update_params)
+        """
+        namespace_groups = defaultdict(list)
+        refresh_ttls = defaultdict(list)
+        for idx, op in get_ops:
+            namespace_groups[op.namespace].append((idx, op.key))
+            refresh_ttls[op.namespace].append(op.refresh_ttl)
+
+        results = []
+        for namespace, items in namespace_groups.items():
+            _, keys = zip(*items)
+            this_refresh_ttls = refresh_ttls[namespace]
+
+            update_query = None
+            update_params = None
+            if any(this_refresh_ttls):
+                keys_to_refresh = [k for (_, k), r in zip(items, this_refresh_ttls) if r]
+                if keys_to_refresh:
+                    update_query = (
+                        f"""
+                        UPDATE store
+                        SET expires_at = SYSTIMESTAMP + NUMTODSINTERVAL(ttl_minutes, 'MINUTE')
+                        WHERE prefix = :1 AND key IN ({','.join([':{}'.format(i+2) for i in range(len(keys_to_refresh))])}) AND ttl_minutes IS NOT NULL
+                        """
+                    )
+                    update_params = (namespace, *keys_to_refresh)
+
+            select_query = (
+                f"""
+                SELECT key, value, created_at, updated_at
+                FROM store
+                WHERE prefix = :1 AND key IN ({','.join([':{}'.format(i+2) for i in range(len(keys))])})
+                """
+            )
+            select_params = (namespace, *keys)
+
+            results.append((select_query, select_params, namespace, items, update_query, update_params))
+
+        return results
+
     def _batch_get_ops(
         self,
         get_ops: Sequence[tuple[int, GetOp]],
         results: list[Result],
         cur: oracledb.Cursor,
     ) -> None:
-        # OracleではIN句の最大数に注意
-        namespace_groups = defaultdict(list)
-        for idx, op in get_ops:
-            namespace_groups[op.namespace].append((idx, op.key, op.refresh_ttl))
-
-        for namespace, items in namespace_groups.items():
-            keys = [k for _, k, _ in items]
-            refresh_ttls = [r for _, _, r in items]
-            # TTL更新
-            for key, refresh in zip(keys, refresh_ttls):
-                if refresh:
-                    cur.execute(
-                        """
-                        UPDATE store
-                        SET expires_at = SYSTIMESTAMP + NUMTODSINTERVAL(ttl_minutes, 'MINUTE')
-                        WHERE prefix = :1 AND key = :2 AND ttl_minutes IS NOT NULL
-                        """,
-                        (namespace, key),
-                    )
-            # データ取得
-            cur.execute(
-                f"""
-                SELECT key, value, created_at, updated_at
-                FROM store
-                WHERE prefix = :1 AND key IN ({','.join([':{}'.format(i+2) for i in range(len(keys))])})
-                """,
-                (namespace, *keys),
-            )
+        # Use _get_batch_GET_ops_queries to generate queries per namespace
+        for select_query, select_params, namespace, items, update_query, update_params in self._get_batch_GET_ops_queries(get_ops):
+            # Run TTL update if needed
+            if update_query and update_params:
+                cur.execute(update_query, update_params)
+            # Fetch data
+            cur.execute(select_query, select_params)
             rows = cur.fetchall()
             key_to_row = {row[0]: row for row in rows}
-            for idx, key, _ in items:
+            for idx, key in items:
                 row = key_to_row.get(key)
                 if row:
                     results[idx] = Item(
