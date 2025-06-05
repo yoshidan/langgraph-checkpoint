@@ -323,41 +323,148 @@ class BaseOracleStore:
                 )
                 # ベクトル埋め込みも必要ならここで追加
 
+    def _prepare_batch_search_queries(
+        self,
+        search_ops: Sequence[tuple[int, SearchOp]],
+    ) -> tuple[
+        list[tuple[str, list]],
+        list[tuple[int, str]],
+    ]:
+        """
+        Build per-SearchOp SQL queries (with optional TTL refresh) plus embedding requests.
+        Returns:
+        - queries: list of (SQL, param_list)
+        - embedding_requests: list of (original_index_in_search_ops, text_query)
+        """
+        queries = []
+        embedding_requests = []
+        for idx, (_, op) in enumerate(search_ops):
+            filter_params = []
+            filter_clauses = []
+            if op.filter:
+                for key, value in op.filter.items():
+                    if isinstance(value, dict):
+                        for op_name, val in value.items():
+                            # Only $eq supported for now
+                            if op_name == "$eq":
+                                filter_clauses.append(f"JSON_VALUE(value, '$.{key}') = :{len(filter_params)+1}")
+                                filter_params.append(val)
+                            else:
+                                raise ValueError(f"Unsupported operator: {op_name}")
+                    else:
+                        filter_clauses.append(f"JSON_VALUE(value, '$.{key}') = :{len(filter_params)+1}")
+                        filter_params.append(value)
+
+            ns_condition = "prefix = :ns"
+            ns_param = op.namespace_prefix if op.namespace_prefix else op.namespace
+
+            extra_filters = (
+                " AND " + " AND ".join(filter_clauses) if filter_clauses else ""
+            )
+
+            if op.query and self.index_config:
+                embedding_requests.append((idx, op.query))
+                # Oracle vector search SQL (simplified, no ANN index logic)
+                # You may need to adjust for your Oracle vector index implementation
+                vector_search_sql = f"""
+                        SELECT prefix, key, value, created_at, updated_at,
+                            VECTOR_DISTANCE(embedding, :vector) AS neg_score
+                        FROM store_vectors
+                        WHERE prefix = :ns
+                        ORDER BY neg_score ASC
+                        FETCH FIRST :limit ROWS ONLY
+                    """
+
+                search_results_sql = f"""
+                        WITH scored AS (
+                            {vector_search_sql}
+                        )
+                        SELECT s.prefix, s.key, s.value, s.created_at, s.updated_at,
+                            scored.neg_score AS score
+                        FROM store s
+                        JOIN scored ON s.prefix = scored.prefix AND s.key = scored.key
+                        ORDER BY score DESC
+                        OFFSET :offset ROWS FETCH NEXT :limit2 ROWS ONLY
+                    """
+
+                search_results_params = {
+                    "vector": None,  # placeholder for embedding
+                    "ns": ns_param,
+                    "limit": op.limit * (self.index_config.get("__estimated_num_vectors", 1) * 2 + 1),
+                    "offset": op.offset,
+                    "limit2": op.limit,
+                }
+                # Oracle doesn't support positional placeholders in the same way as Postgres
+                # so we use named parameters
+
+            else:
+                base_query = f"""
+                        SELECT prefix, key, value, created_at, updated_at, NULL AS score
+                        FROM store
+                        WHERE {ns_condition}{extra_filters}
+                        ORDER BY updated_at DESC
+                        OFFSET :offset ROWS FETCH NEXT :limit ROWS ONLY
+                    """
+                search_results_sql = base_query
+                search_results_params = {
+                    "ns": ns_param,
+                    "offset": op.offset,
+                    "limit": op.limit,
+                }
+                for i, val in enumerate(filter_params):
+                    search_results_params[f"f{i}"] = val
+
+            if op.refresh_ttl:
+                # Oracle: update TTL for selected keys, then select
+                final_sql = f"""
+                        DECLARE
+                            CURSOR c IS
+                                {search_results_sql};
+                        BEGIN
+                            FOR r IN c LOOP
+                                UPDATE store
+                                SET expires_at = SYSTIMESTAMP + NUMTODSINTERVAL(ttl_minutes, 'MINUTE')
+                                WHERE prefix = r.prefix AND key = r.key AND ttl_minutes IS NOT NULL;
+                            END LOOP;
+                        END;
+                    """
+                final_params = search_results_params.copy()
+            else:
+                final_sql = search_results_sql
+                final_params = search_results_params
+
+            queries.append((final_sql, final_params))
+
+        return queries, embedding_requests
+
     def _batch_search_ops(
         self,
         search_ops: Sequence[tuple[int, SearchOp]],
         results: list[Result],
         cur: oracledb.Cursor,
     ) -> None:
-        for idx, op in search_ops:
-            filter_clauses = []
-            params = []
-            if op.filter:
-                for key, value in op.filter.items():
-                    filter_clauses.append(f"JSON_VALUE(value, '$.{key}') = :{len(params)+1}")
-                    params.append(value)
-            ns_condition = "prefix = :{}".format(len(params)+1)
-            params.append(op.namespace_prefix if op.namespace_prefix else op.namespace)
-            where_clause = " AND ".join([ns_condition] + filter_clauses) if filter_clauses else ns_condition
-            cur.execute(
-                f"""
-                SELECT key, value, created_at, updated_at
-                FROM store
-                WHERE {where_clause}
-                ORDER BY updated_at DESC
-                OFFSET :{len(params)+1} ROWS FETCH NEXT :{len(params)+2} ROWS ONLY
-                """,
-                (*params, op.offset, op.limit),
+        queries, embedding_requests = self._prepare_batch_search_queries(search_ops)
+
+        if embedding_requests and self.embeddings:
+            vectors = self.embeddings.embed_documents(
+                [query for _, query in embedding_requests]
             )
+            for (idx, _), vector in zip(embedding_requests, vectors):
+                params = queries[idx][1]
+                if isinstance(params, dict):
+                    params["vector"] = vector
+
+        for (idx, _), (query, params) in zip(search_ops, queries):
+            cur.execute(query, params)
             rows = cur.fetchall()
             results[idx] = [
                 SearchItem(
-                    value=orjson.loads(row[1].read() if hasattr(row[1], "read") else row[1]),
-                    key=row[0],
-                    namespace=op.namespace,
-                    created_at=row[2],
-                    updated_at=row[3],
-                    score=None,
+                    value=orjson.loads(row[2].read() if hasattr(row[2], "read") else row[2]),
+                    key=row[1],
+                    namespace=row[0] if isinstance(row[0], tuple) else (row[0],),
+                    created_at=row[3],
+                    updated_at=row[4],
+                    score=row[5] if len(row) > 5 else None,
                 )
                 for row in rows
             ]
@@ -464,3 +571,4 @@ def _group_ops(ops: Iterable[Op]) -> tuple[dict[type, list[tuple[int, Op]]], int
         grouped_ops[type(op)].append((idx, op))
         tot += 1
     return grouped_ops, tot
+
