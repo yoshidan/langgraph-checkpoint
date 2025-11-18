@@ -327,13 +327,22 @@ class AsyncOracleSaver(BaseOracleSaver):
                         self._load_checkpoint,
                         self.jsonplus_serde.loads(await row_dict["CHECKPOINT"].read()),
                         decode_channel_values(
-                            await row_dict["CHANNEL_VALUES"].read() if row_dict["CHANNEL_VALUES"] else None, self.jsonplus_serde
+                            await row_dict["CHANNEL_VALUES"].read()
+                            if row_dict["CHANNEL_VALUES"]
+                            else None,
+                            self.jsonplus_serde,
                         ),
                         decode_pending_sends(
-                            await row_dict["PENDING_SENDS"].read() if row_dict["PENDING_SENDS"] else None, self.jsonplus_serde
+                            await row_dict["PENDING_SENDS"].read()
+                            if row_dict["PENDING_SENDS"]
+                            else None,
+                            self.jsonplus_serde,
                         ),
                         decode_channel_versions(
-                            await row_dict["CHANNEL_VERSIONS"].read() if row_dict["CHANNEL_VERSIONS"] else None, self.jsonplus_serde
+                            await row_dict["CHANNEL_VERSIONS"].read()
+                            if row_dict["CHANNEL_VERSIONS"]
+                            else None,
+                            self.jsonplus_serde,
                         ),
                     ),
                     self._load_metadata(
@@ -353,7 +362,10 @@ class AsyncOracleSaver(BaseOracleSaver):
                     await asyncio.to_thread(
                         self._load_writes,
                         decode_pending_writes(
-                            await row_dict["PENDING_WRITES"].read() if row_dict["PENDING_WRITES"] else None, self.jsonplus_serde
+                            await row_dict["PENDING_WRITES"].read()
+                            if row_dict["PENDING_WRITES"]
+                            else None,
+                            self.jsonplus_serde,
                         ),
                     ),
                 )

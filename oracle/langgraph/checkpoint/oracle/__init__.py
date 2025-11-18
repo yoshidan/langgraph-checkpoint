@@ -371,13 +371,22 @@ class OracleSaver(BaseOracleSaver):
                     self._load_checkpoint(
                         self.jsonplus_serde.loads(row_dict["CHECKPOINT"].read()),
                         decode_channel_values(
-                            row_dict["CHANNEL_VALUES"].read() if row_dict["CHANNEL_VALUES"] else None, self.jsonplus_serde
+                            row_dict["CHANNEL_VALUES"].read()
+                            if row_dict["CHANNEL_VALUES"]
+                            else None,
+                            self.jsonplus_serde,
                         ),
                         decode_pending_sends(
-                            row_dict["PENDING_SENDS"].read() if row_dict["PENDING_SENDS"] else None, self.jsonplus_serde
+                            row_dict["PENDING_SENDS"].read()
+                            if row_dict["PENDING_SENDS"]
+                            else None,
+                            self.jsonplus_serde,
                         ),
                         decode_channel_versions(
-                            row_dict["CHANNEL_VERSIONS"].read() if row_dict["CHANNEL_VERSIONS"] else None, self.jsonplus_serde
+                            row_dict["CHANNEL_VERSIONS"].read()
+                            if row_dict["CHANNEL_VERSIONS"]
+                            else None,
+                            self.jsonplus_serde,
                         ),
                     ),
                     self._load_metadata(
@@ -396,7 +405,10 @@ class OracleSaver(BaseOracleSaver):
                     ),
                     self._load_writes(
                         decode_pending_writes(
-                            row_dict["PENDING_WRITES"].read() if row_dict["PENDING_WRITES"] else None, self.jsonplus_serde
+                            row_dict["PENDING_WRITES"].read()
+                            if row_dict["PENDING_WRITES"]
+                            else None,
+                            self.jsonplus_serde,
                         )
                     ),
                 )
@@ -414,4 +426,3 @@ def _execute_ddl(ddl: str, cur: Cursor) -> None:
     except Exception as e:
         if "ORA-00955" not in str(e):  # Object already exists
             raise
-
