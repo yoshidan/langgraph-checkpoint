@@ -7,6 +7,9 @@ on:
     paths:
       - oracle/**
       - .github/workflows/ci_oracle.yaml
+  pull_request:
+    branches:
+      - main
 
 defaults:
   run:
@@ -31,17 +34,6 @@ jobs:
           --health-interval=10s
           --health-timeout=5s
           --health-retries=10
-      oracle-21c:
-        image: container-registry.oracle.com/database/express:21.3.0-xe
-        ports:
-          - 1531:1521
-        options: >-
-          --env ORACLE_PWD=test
-          --env ORACLE_CHARACTERSET=AL32UTF8
-          --health-cmd="echo 'SELECT 1 FROM dual;' | sqlplus -s system/test@localhost:1521/XE"
-          --health-interval=10s
-          --health-timeout=5s
-          --health-retries=10
     steps:
       - uses: actions/checkout@v2
       - name: Setup Python
@@ -55,7 +47,11 @@ jobs:
         run: poetry install
       - name: lint
         run: make lint
-      - name: test-oracle-23ai
+      - name: test
         run: poetry run pytest tests
-      - name: test-oracle-21c
-        run: PORT=1531 poetry run pytest tests
+      - name: Run examples
+        if: matrix.python-version != '3.10'
+        run: |
+          cd ../example
+          poetry install
+          poetry run python oracle.py

@@ -1,4 +1,4 @@
-name: CI Oracle 18
+name: CI Oracle 21
 
 on:
   push:
@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - oracle/**
-      - .github/workflows/ci_oracle_18.yaml
+      - .github/workflows/ci_oracle_21.yaml
   pull_request:
     branches:
       - main
@@ -23,12 +23,13 @@ jobs:
       matrix:
         python-version: [ "3.13" ]
     services:
-      oracle-18c:
-        image: gvenzl/oracle-xe:18.4.0-slim
+      oracle-21c:
+        image: container-registry.oracle.com/database/express:21.3.0-xe
         ports:
           - 1521:1521
         options: >-
-          --env ORACLE_PASSWORD=test
+          --env ORACLE_PWD=test
+          --env ORACLE_CHARACTERSET=AL32UTF8
           --health-cmd="echo 'SELECT 1 FROM dual;' | sqlplus -s system/test@localhost:1521/XE"
           --health-interval=10s
           --health-timeout=5s

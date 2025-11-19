@@ -85,35 +85,37 @@ SELECT
     (
         SELECT JSON_ARRAYAGG(
             JSON_ARRAY(channel, version)
+            RETURNING CLOB
         )
         FROM (
-            SELECT 
+            SELECT
                 cv.channel,
                 cv.version
             FROM checkpoint_channel_versions cv
             WHERE cv.thread_id = c.thread_id
             AND cv.checkpoint_ns = c.checkpoint_ns
             AND cv.checkpoint_id = c.checkpoint_id
-        ) 
+        )
     ) AS channel_versions,
     (
         SELECT JSON_ARRAYAGG(
-            JSON_ARRAY(channel, type, blob)
+            JSON_ARRAY(channel, type, blob RETURNING CLOB)
+            RETURNING CLOB
         )
         FROM (
-            SELECT 
+            SELECT
                 cv.channel,
                 bl.type,
                 bl.blob
             FROM (
-                SELECT 
+                SELECT
                     cvi.channel,
                     cvi.version
                 FROM checkpoint_channel_versions cvi
                 WHERE cvi.thread_id = c.thread_id
                 AND cvi.checkpoint_ns = c.checkpoint_ns
                 AND cvi.checkpoint_id = c.checkpoint_id
-            ) cv 
+            ) cv
             JOIN checkpoint_blobs bl
               ON bl.thread_id = c.thread_id
              AND bl.checkpoint_ns = c.checkpoint_ns
@@ -124,10 +126,11 @@ SELECT
  
     (
         SELECT JSON_ARRAYAGG(
-            JSON_ARRAY(task_id, channel, type, blob)
+            JSON_ARRAY(task_id, channel, type, blob RETURNING CLOB)
+            RETURNING CLOB
         )
         FROM (
-            SELECT 
+            SELECT
                 cw.task_id,
                 cw.channel,
                 cw.type,
@@ -142,10 +145,11 @@ SELECT
 
     (
         SELECT JSON_ARRAYAGG(
-            JSON_ARRAY(type, blob)
+            JSON_ARRAY(type, blob RETURNING CLOB)
+            RETURNING CLOB
         )
         FROM (
-            SELECT 
+            SELECT
                 cw.type,
                 cw.blob
             FROM checkpoint_writes cw
