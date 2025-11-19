@@ -46,6 +46,12 @@ jobs:
           --health-timeout=5s
           --health-retries=10
     steps:
+      - name: Clean up packages
+        run: |
+          sudo rm -rf "/usr/share/dotnet" || true
+          sudo rm -rf "/usr/local/lib/android" || true
+          sudo rm -rf "/usr/local/share/boost" || true
+          docket system prune --volumes -f
       - uses: actions/checkout@v2
       - name: Setup Python
         uses: actions/setup-python@v5
