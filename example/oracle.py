@@ -1,8 +1,6 @@
 import datetime
 import random
 
-from anyio.lowlevel import checkpoint
-
 from langgraph.checkpoint.oracle import OracleSaver
 from langgraph.graph import START, MessagesState, StateGraph
 from oracledb import ConnectParams
