@@ -49,3 +49,8 @@ jobs:
         run: make lint
       - name: test
         run: poetry run pytest tests
+      - name: Run examples
+        run: |
+          cd ../example
+          poetry install
+          poetry run python oracle.py

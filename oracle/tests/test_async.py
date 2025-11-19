@@ -287,9 +287,18 @@ async def test_large_data_over_4000_bytes(saver_name: str) -> None:
         # Verify first checkpoint can be retrieved
         result_1 = await saver.aget_tuple(config_result_1)
         assert result_1 is not None
-        assert result_1.checkpoint["channel_values"]["channel1"][0]["content"] == large_content
-        assert result_1.checkpoint["channel_values"]["channel2"][0]["content"] == large_content
-        assert result_1.checkpoint["channel_values"]["channel3"][0]["content"] == large_content
+        assert (
+            result_1.checkpoint["channel_values"]["channel1"][0]["content"]
+            == large_content
+        )
+        assert (
+            result_1.checkpoint["channel_values"]["channel2"][0]["content"]
+            == large_content
+        )
+        assert (
+            result_1.checkpoint["channel_values"]["channel3"][0]["content"]
+            == large_content
+        )
         assert result_1.metadata["description"] == large_content
 
         # Create second checkpoint with even more data to ensure cumulative data > 4000 bytes
@@ -335,15 +344,29 @@ async def test_large_data_over_4000_bytes(saver_name: str) -> None:
         )
 
         # Add pending writes
-        await saver.aput_writes(config_result_2, large_writes, "task-large", "path-large")
+        await saver.aput_writes(
+            config_result_2, large_writes, "task-large", "path-large"
+        )
 
         # Verify second checkpoint can be retrieved (this would fail with ORA-40478 before the fix)
         result_2 = await saver.aget_tuple(config_result_2)
         assert result_2 is not None
-        assert result_2.checkpoint["channel_values"]["channel1"][0]["content"] == large_content + "1"
-        assert result_2.checkpoint["channel_values"]["channel2"][0]["content"] == large_content + "2"
-        assert result_2.checkpoint["channel_values"]["channel3"][0]["content"] == large_content + "3"
-        assert result_2.checkpoint["channel_values"]["channel4"][0]["content"] == large_content + "4"
+        assert (
+            result_2.checkpoint["channel_values"]["channel1"][0]["content"]
+            == large_content + "1"
+        )
+        assert (
+            result_2.checkpoint["channel_values"]["channel2"][0]["content"]
+            == large_content + "2"
+        )
+        assert (
+            result_2.checkpoint["channel_values"]["channel3"][0]["content"]
+            == large_content + "3"
+        )
+        assert (
+            result_2.checkpoint["channel_values"]["channel4"][0]["content"]
+            == large_content + "4"
+        )
         assert result_2.metadata["description"] == large_content + "second"
 
         # Verify pending writes were stored correctly
@@ -355,7 +378,10 @@ async def test_large_data_over_4000_bytes(saver_name: str) -> None:
 
         # List all checkpoints for this thread (tests aggregation across multiple checkpoints)
         all_checkpoints = [
-            c async for c in saver.alist({"configurable": {"thread_id": "thread-large-1"}})
+            c
+            async for c in saver.alist(
+                {"configurable": {"thread_id": "thread-large-1"}}
+            )
         ]
         assert len(all_checkpoints) == 2
 
@@ -364,5 +390,7 @@ async def test_large_data_over_4000_bytes(saver_name: str) -> None:
             assert checkpoint_tuple.checkpoint is not None
             assert checkpoint_tuple.metadata is not None
             # Each checkpoint should have large channel values
-            for channel_values in checkpoint_tuple.checkpoint["channel_values"].values():
+            for channel_values in checkpoint_tuple.checkpoint[
+                "channel_values"
+            ].values():
                 assert len(channel_values[0]["content"]) >= 2000
