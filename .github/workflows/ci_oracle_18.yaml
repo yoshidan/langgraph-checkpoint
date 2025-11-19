@@ -26,7 +26,7 @@ jobs:
       oracle-18c:
         image: gvenzl/oracle-xe:18.4.0-slim
         ports:
-          - 1541:1521
+          - 1521:1521
         options: >-
           --env ORACLE_PASSWORD=test
           --health-cmd="echo 'SELECT 1 FROM dual;' | sqlplus -s system/test@localhost:1521/XE"
@@ -45,10 +45,10 @@ jobs:
       - name: Install
         run: poetry install
       - name: test
-        run: PORT=1541 poetry run pytest tests
+        run: poetry run pytest tests
       - name: Run examples
         if: matrix.python-version != '3.10'
         run: |
           cd ../example
           poetry install
-          PORT=1541 poetry run python oracle.py
+          poetry run python oracle.py
