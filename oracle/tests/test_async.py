@@ -1,6 +1,7 @@
 # type: ignore
 import os
 from contextlib import asynccontextmanager
+from datetime import datetime, timezone
 from typing import Any
 
 import pytest
@@ -12,8 +13,10 @@ from langgraph.checkpoint.base import (
     create_checkpoint,
     empty_checkpoint,
     get_checkpoint_metadata,
+    uuid6,
 )
 from langgraph.checkpoint.oracle.aio import AsyncOracleSaver
+from langgraph.checkpoint.serde.types import TASKS
 from tests.conftest import copy_config_from, exclude_keys
 
 
@@ -226,3 +229,140 @@ async def test_null_chars(saver_name: str, test_data) -> None:
         assert [c async for c in saver.alist(None, filter={"my_key": "abc"})][
             0
         ].metadata["my_key"] == "abc"
+
+
+@pytest.mark.parametrize("saver_name", ["base", "pool", "tx"])
+async def test_large_data_over_4000_bytes(saver_name: str) -> None:
+    """Test that checkpoints with data exceeding 4000 bytes can be stored and retrieved.
+
+    This test verifies the fix for ORA-40478 error by ensuring that JSON_ARRAYAGG
+    returns CLOB instead of VARCHAR2, which has a 4000-byte limit.
+    """
+    async with _saver(saver_name) as saver:
+        # Create a large message that exceeds 4000 bytes
+        # Each channel will have multiple large messages
+        large_content = "x" * 2000  # 2KB per message
+
+        # Create checkpoint with large channel values (will be aggregated by JSON_ARRAYAGG)
+        config_1: Any = {
+            "configurable": {
+                "thread_id": "thread-large-1",
+                "checkpoint_ns": "",
+            }
+        }
+
+        chkpnt_1: Checkpoint = Checkpoint(
+            v=1,
+            id=str(uuid6(clock_seq=-2)),
+            ts=datetime.now(timezone.utc).isoformat(),
+            channel_values={
+                "channel1": [{"content": large_content, "role": "user"}],
+                "channel2": [{"content": large_content, "role": "assistant"}],
+                "channel3": [{"content": large_content, "role": "system"}],
+            },
+            channel_versions={
+                "channel1": "v1",
+                "channel2": "v1",
+                "channel3": "v1",
+            },
+            versions_seen={
+                "__input__": {},
+                "__start__": {"__start__": 1},
+            },
+            pending_sends=[],
+        )
+
+        metadata_1: CheckpointMetadata = {
+            "source": "input",
+            "step": 1,
+            "writes": {"large_key": large_content},
+            "description": large_content,
+        }
+
+        # Store first checkpoint
+        config_result_1 = await saver.aput(
+            config_1, chkpnt_1, metadata_1, chkpnt_1["channel_versions"]
+        )
+
+        # Verify first checkpoint can be retrieved
+        result_1 = await saver.aget_tuple(config_result_1)
+        assert result_1 is not None
+        assert result_1.checkpoint["channel_values"]["channel1"][0]["content"] == large_content
+        assert result_1.checkpoint["channel_values"]["channel2"][0]["content"] == large_content
+        assert result_1.checkpoint["channel_values"]["channel3"][0]["content"] == large_content
+        assert result_1.metadata["description"] == large_content
+
+        # Create second checkpoint with even more data to ensure cumulative data > 4000 bytes
+        config_2: Any = {
+            "configurable": {
+                "thread_id": "thread-large-1",
+                "checkpoint_id": chkpnt_1["id"],
+                "checkpoint_ns": "",
+            }
+        }
+
+        chkpnt_2: Checkpoint = create_checkpoint(chkpnt_1, {}, 2)
+        chkpnt_2["channel_values"] = {
+            "channel1": [{"content": large_content + "1", "role": "user"}],
+            "channel2": [{"content": large_content + "2", "role": "assistant"}],
+            "channel3": [{"content": large_content + "3", "role": "system"}],
+            "channel4": [{"content": large_content + "4", "role": "user"}],
+        }
+        chkpnt_2["channel_versions"] = {
+            "channel1": "v2",
+            "channel2": "v2",
+            "channel3": "v2",
+            "channel4": "v2",
+        }
+
+        metadata_2: CheckpointMetadata = {
+            "source": "loop",
+            "step": 2,
+            "writes": {"large_key": large_content + "second"},
+            "description": large_content + "second",
+        }
+
+        # Add large pending writes (tests PENDING_WRITES aggregation)
+        large_writes: Any = [
+            ("channel1", [{"content": large_content + "write1", "role": "user"}]),
+            ("channel2", [{"content": large_content + "write2", "role": "assistant"}]),
+            (TASKS, [{"content": large_content + "task", "role": "system"}]),
+        ]
+
+        # Store second checkpoint
+        config_result_2 = await saver.aput(
+            config_2, chkpnt_2, metadata_2, chkpnt_2["channel_versions"]
+        )
+
+        # Add pending writes
+        await saver.aput_writes(config_result_2, large_writes, "task-large", "path-large")
+
+        # Verify second checkpoint can be retrieved (this would fail with ORA-40478 before the fix)
+        result_2 = await saver.aget_tuple(config_result_2)
+        assert result_2 is not None
+        assert result_2.checkpoint["channel_values"]["channel1"][0]["content"] == large_content + "1"
+        assert result_2.checkpoint["channel_values"]["channel2"][0]["content"] == large_content + "2"
+        assert result_2.checkpoint["channel_values"]["channel3"][0]["content"] == large_content + "3"
+        assert result_2.checkpoint["channel_values"]["channel4"][0]["content"] == large_content + "4"
+        assert result_2.metadata["description"] == large_content + "second"
+
+        # Verify pending writes were stored correctly
+        assert len(result_2.pending_writes) == 3
+        pending_contents = [w[2][0]["content"] for w in result_2.pending_writes]
+        assert large_content + "write1" in pending_contents
+        assert large_content + "write2" in pending_contents
+        assert large_content + "task" in pending_contents
+
+        # List all checkpoints for this thread (tests aggregation across multiple checkpoints)
+        all_checkpoints = [
+            c async for c in saver.alist({"configurable": {"thread_id": "thread-large-1"}})
+        ]
+        assert len(all_checkpoints) == 2
+
+        # Verify both checkpoints have correct large data
+        for checkpoint_tuple in all_checkpoints:
+            assert checkpoint_tuple.checkpoint is not None
+            assert checkpoint_tuple.metadata is not None
+            # Each checkpoint should have large channel values
+            for channel_values in checkpoint_tuple.checkpoint["channel_values"].values():
+                assert len(channel_values[0]["content"]) >= 2000

@@ -1,4 +1,4 @@
-name: CI Oracle
+name: CI Oracle 21
 
 on:
   push:

@@ -1,4 +1,4 @@
-name: CI Oracle Legacy
+name: CI Oracle 18
 
 on:
   push:
