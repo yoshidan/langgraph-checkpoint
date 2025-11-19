@@ -6,7 +6,7 @@ on:
       - main
     paths:
       - oracle/**
-      - .github/workflows/ci_oracle.yaml
+      - .github/workflows/ci_oracle_21.yaml
   pull_request:
     branches:
       - main
