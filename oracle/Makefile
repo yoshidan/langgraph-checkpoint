@@ -1,4 +1,4 @@
-.PHONY: test test_watch lint format
+.PHONY: test test_watch lint format build publish-test publish
 
 ######################
 # TESTING AND COVERAGE
@@ -44,3 +44,16 @@ lint lint_diff lint_package lint_tests:
 format format_diff:
 	poetry run ruff format $(PYTHON_FILES)
 	poetry run ruff check --select I --fix $(PYTHON_FILES)
+
+######################
+# PUBLISHING
+######################
+
+build:
+	poetry build
+
+publish-test: build
+	poetry publish -r testpypi
+
+publish: build
+	poetry publish
