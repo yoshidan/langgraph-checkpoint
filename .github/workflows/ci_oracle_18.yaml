@@ -44,7 +44,7 @@ jobs:
           version: '2.1.0'
       - name: Install
         run: poetry install
-      - name: test-oracle-18c
+      - name: test
         run: PORT=1541 poetry run pytest tests
       - name: Run examples
         run: |

@@ -47,3 +47,8 @@ jobs:
         run: poetry install
       - name: test
         run: PORT=1531 poetry run pytest tests
+      - name: Run examples
+        run: |
+          cd ../example
+          poetry install
+          PORT=1531 poetry run python oracle.py
