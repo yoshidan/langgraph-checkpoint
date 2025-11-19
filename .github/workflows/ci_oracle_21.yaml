@@ -47,4 +47,5 @@ jobs:
         run: poetry install
       - name: lint
         run: make lint
+      - name: test
         run: PORT=1531 poetry run pytest tests

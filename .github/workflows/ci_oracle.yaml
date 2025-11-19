@@ -47,5 +47,5 @@ jobs:
         run: poetry install
       - name: lint
         run: make lint
-      - name: test-oracle-23ai
+      - name: test
         run: poetry run pytest tests
