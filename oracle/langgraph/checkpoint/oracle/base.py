@@ -99,7 +99,7 @@ SELECT
     ) AS channel_versions,
     (
         SELECT JSON_ARRAYAGG(
-            JSON_ARRAY(channel, type, blob)
+            JSON_ARRAY(channel, type, blob RETURNING CLOB)
             RETURNING CLOB
         )
         FROM (
@@ -126,7 +126,7 @@ SELECT
  
     (
         SELECT JSON_ARRAYAGG(
-            JSON_ARRAY(task_id, channel, type, blob)
+            JSON_ARRAY(task_id, channel, type, blob RETURNING CLOB)
             RETURNING CLOB
         )
         FROM (
@@ -145,7 +145,7 @@ SELECT
 
     (
         SELECT JSON_ARRAYAGG(
-            JSON_ARRAY(type, blob)
+            JSON_ARRAY(type, blob RETURNING CLOB)
             RETURNING CLOB
         )
         FROM (
