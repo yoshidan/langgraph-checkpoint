@@ -23,6 +23,7 @@ pytest-asyncio = "^0.21.1"
 pytest-mock = "^3.11.1"
 mypy = "^1.10.0"
 langgraph-checkpoint = "2.0.25"
+langgraph = ">=0.2.0"
 pytest-watcher = { version = ">=0.4.3", python = "<4.0" }
 
 [tool.pytest.ini_options]
