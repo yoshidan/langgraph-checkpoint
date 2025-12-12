@@ -1,5 +1,6 @@
 # type: ignore
 import os
+import random
 from contextlib import asynccontextmanager
 from datetime import datetime, timezone
 from typing import Any
@@ -17,6 +18,7 @@ from langgraph.checkpoint.base import (
 )
 from langgraph.checkpoint.oracle.aio import AsyncOracleSaver
 from langgraph.checkpoint.serde.types import TASKS
+from langgraph.graph import START, MessagesState, StateGraph
 from tests.conftest import copy_config_from, exclude_keys
 
 
@@ -394,3 +396,57 @@ async def test_large_data_over_4000_bytes(saver_name: str) -> None:
                 "channel_values"
             ].values():
                 assert len(channel_values[0]["content"]) >= 2000
+
+
+@pytest.mark.parametrize("saver_name", ["base", "pool", "tx"])
+async def test_multiple_invocations_same_thread(saver_name: str) -> None:
+    """Test that graph nodes execute correctly across multiple invocations with same thread_id.
+
+    This test verifies the fix for an issue where nodes would stop executing after
+    a few iterations when using the same thread_id repeatedly. The root cause was
+    that get_next_version returned non-unique version numbers, causing LangGraph
+    to incorrectly detect nodes as "already executed".
+    """
+    execution_log: list[str] = []
+
+    def node1(state: MessagesState):
+        execution_log.append("node1")
+        return {"messages": f"msg1-{random.randint(0, 100)}"}
+
+    def node2(state: MessagesState):
+        execution_log.append("node2")
+        return {"messages": f"msg2-{random.randint(0, 100)}"}
+
+    builder = StateGraph(MessagesState)
+    builder.add_node("node1", node1)
+    builder.add_node("node2", node2)
+    builder.add_edge(START, "node1")
+    builder.add_edge("node1", "node2")
+
+    thread_id = f"test-multi-invoke-{datetime.now().isoformat()}"
+    config = {"configurable": {"thread_id": thread_id}}
+
+    async with _saver(saver_name) as saver:
+        graph = builder.compile(checkpointer=saver)
+
+        # Run multiple iterations with the same thread_id
+        for i in range(6):
+            execution_log.clear()
+
+            result = await graph.ainvoke(
+                {"messages": [{"role": "user", "content": "test message"}]},
+                config,
+            )
+
+            # Both nodes should execute on every iteration
+            assert "node1" in execution_log, f"node1 did not execute on iteration {i}"
+            assert "node2" in execution_log, f"node2 did not execute on iteration {i}"
+            assert result is not None, f"Result was None on iteration {i}"
+
+            # Messages should accumulate: initial + (node1 + node2) per iteration
+            expected_count = (
+                1 + (i + 1) * 2 + i
+            )  # input + nodes output + previous inputs
+            assert (
+                len(result["messages"]) == expected_count
+            ), f"Expected {expected_count} messages on iteration {i}, got {len(result['messages'])}"

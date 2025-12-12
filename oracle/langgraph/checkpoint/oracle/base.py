@@ -1,3 +1,4 @@
+import random
 from collections.abc import Sequence
 from typing import Any, Generator, Optional, cast
 
@@ -340,8 +341,12 @@ class BaseOracleSaver(BaseCheckpointSaver[str]):
 
     def get_next_version(self, current: Optional[str], channel: ChannelProtocol) -> str:
         if current is None:
-            return "0"
-        return str(int(current) + 1)
+            current_v = 0
+        else:
+            current_v = int(current.split(".")[0])
+        next_v = current_v + 1
+        next_h = random.random()
+        return f"{next_v:032}.{next_h:016}"
 
     def _search_where(
         self,
