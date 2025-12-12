@@ -444,7 +444,9 @@ async def test_multiple_invocations_same_thread(saver_name: str) -> None:
             assert result is not None, f"Result was None on iteration {i}"
 
             # Messages should accumulate: initial + (node1 + node2) per iteration
-            expected_count = 1 + (i + 1) * 2 + i  # input + nodes output + previous inputs
+            expected_count = (
+                1 + (i + 1) * 2 + i
+            )  # input + nodes output + previous inputs
             assert (
                 len(result["messages"]) == expected_count
             ), f"Expected {expected_count} messages on iteration {i}, got {len(result['messages'])}"
