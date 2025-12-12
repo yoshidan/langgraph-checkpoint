@@ -1,6 +1,6 @@
 [tool.poetry]
 name = "langgraph-checkpoint-oracle"
-version = "2.0.0rc8"
+version = "2.0.0rc10"
 description = "Library with an Oracle Database implementation of LangGraph checkpoint saver."
 authors = ["yoshidan <naohiro.y@gmail.com>"]
 license = "MIT"
