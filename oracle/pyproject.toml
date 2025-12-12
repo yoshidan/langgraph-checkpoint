@@ -51,7 +51,7 @@ warn_no_return = "False"
 warn_unused_ignores = "True"
 warn_redundant_casts = "True"
 allow_redefinition = "True"
-disable_error_code = "typeddict-item, return-value"
+disable_error_code = "typeddict-item, return-value, unused-ignore"
 
 [tool.pytest-watcher]
 now = true
