@@ -408,7 +408,7 @@ class AsyncOracleSaver(BaseOracleSaver):
         while True:
             try:
                 yield asyncio.run_coroutine_threadsafe(
-                    anext(aiter_),  # noqa: F821  # type: ignore[arg-type]
+                    anext(aiter_),  # noqa: F821
                     self.loop,
                 ).result()
             except StopAsyncIteration:
